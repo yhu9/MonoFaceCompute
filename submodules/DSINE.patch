@@ -1,0 +1,120 @@
+diff --git a/projects/dsine/test_minimal_custom.py b/projects/dsine/test_minimal_custom.py
+new file mode 100644
+index 0000000..8a00e8c
+--- /dev/null
++++ b/projects/dsine/test_minimal_custom.py
+@@ -0,0 +1,114 @@
++import os
++import sys
++import glob
++from pathlib import Path
++import numpy as np
++
++import torch
++import torch.nn.functional as F
++from torchvision import transforms
++from PIL import Image
++from tqdm import tqdm
++
++sys.path.insert(0, "../../")
++import utils.utils as utils
++from utils.projection import intrins_from_fov
++
++
++from projects import get_default_parser
++
++def get_args():
++    parser = get_default_parser()
++
++    parser.add_argument('--NNET_architecture', type=str, default='v02')
++    parser.add_argument('--NNET_output_dim', type=int, default=3, help='{3, 4}')
++    parser.add_argument('--NNET_output_type', type=str, default='R', help='{R, G}')
++    parser.add_argument('--NNET_feature_dim', type=int, default=64)
++    parser.add_argument('--NNET_hidden_dim', type=int, default=64)
++
++    parser.add_argument('--NNET_encoder_B', type=int, default=5)
++
++    parser.add_argument('--NNET_decoder_NF', type=int, default=2048)
++    parser.add_argument('--NNET_decoder_BN', default=False, action="store_true")
++    parser.add_argument('--NNET_decoder_down', type=int, default=8)
++    parser.add_argument('--NNET_learned_upsampling', default=False, action="store_true")
++
++    parser.add_argument('--NRN_prop_ps', type=int, default=5)
++    parser.add_argument('--NRN_num_iter_train', type=int, default=5)
++    parser.add_argument('--NRN_num_iter_test', type=int, default=5)
++    parser.add_argument('--NRN_ray_relu', default=False, action="store_true")
++
++    # Test args
++    parser.add_argument("--input_dir", type=Path, help="Input RGB image dir")
++    parser.add_argument('--output_dir', type=Path, help="Path to output images dir")
++
++    # read arguments from txt file
++    assert ".txt" in sys.argv[1]
++    arg_filename_with_prefix = '@' + sys.argv[1]
++    args = parser.parse_known_args([arg_filename_with_prefix] + sys.argv[2:])[0]
++
++    return args
++
++
++if __name__ == "__main__":
++    device = torch.device("cuda")
++    args = get_args()
++    assert os.path.exists(args.ckpt_path)
++
++    if args.NNET_architecture == "v00":
++        from models.dsine.v00 import DSINE_v00 as DSINE
++    elif args.NNET_architecture == "v01":
++        from models.dsine.v01 import DSINE_v01 as DSINE
++    elif args.NNET_architecture == "v02":
++        from models.dsine.v02 import DSINE_v02 as DSINE
++    elif args.NNET_architecture == "v02_kappa":
++        from models.dsine.v02_kappa import DSINE_v02_kappa as DSINE
++    else:
++        raise Exception("invalid arch")
++
++    model = DSINE(args).to(device)
++    model = utils.load_checkpoint(args.ckpt_path, model)
++    model.eval()
++    
++    img_paths = glob.glob(str(args.input_dir / "*.png")) + glob.glob(str(args.input_dir / "*.jpg"))
++    img_paths.sort()
++    normalize = transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
++
++    with torch.no_grad():
++        for img_path in tqdm(img_paths):
++            ext = os.path.splitext(img_path)[1]
++            img = Image.open(img_path).convert("RGB")
++            img = np.array(img).astype(np.float32) / 255.0
++            img = torch.from_numpy(img).permute(2, 0, 1).unsqueeze(0).to(device)
++
++            # pad input
++            _, _, orig_H, orig_W = img.shape
++            lrtb = utils.get_padding(orig_H, orig_W)
++            img = F.pad(img, lrtb, mode="constant", value=0.0)
++            img = normalize(img)
++
++            # NOTE: we assume that the principal point is at the center and that the field-of-view is 60 degrees
++            intrins = intrins_from_fov(new_fov=60.0, H=orig_H, W=orig_W, device=device).unsqueeze(0)
++            intrins[:, 0, 2] += lrtb[0]
++            intrins[:, 1, 2] += lrtb[2]
++
++            output = model(img, intrins=intrins)[-1] # range [-1, 1]
++            output = output[:, :, lrtb[2]:lrtb[2]+orig_H, lrtb[0]:lrtb[0]+orig_W] # (1, 3, H, W)
++
++            output = output.squeeze(0) # (3, H, W)
++            output = output.permute(1, 2, 0) # (H, W, 3)
++
++            R = torch.tensor([
++                [-1, 0, 0],
++                [0, 1, 0],
++                [0, 0, 1],
++            ], dtype=torch.float, device=output.device)
++            output = output @ R
++
++            output_img = (output + 1) * 0.5 # range [0, 1]
++            output_img = (output_img * 255).cpu().numpy().astype(np.uint8)
++            Image.fromarray(output_img, mode="RGB").save(args.output_dir / (Path(img_path).stem + ".png"))
++
++            # save to output folder
++            # NOTE: by saving the prediction as uint8 png format, you lose a lot of precision
++            # if you want to use the predicted normals for downstream tasks, we recommend saving them as float32 NPY files

@@ -1,0 +1,115 @@
+diff --git a/test.py b/test.py
+index 76c4f56..9f881a6 100644
+--- a/test.py
++++ b/test.py
+@@ -11,9 +11,12 @@ import os.path as osp
+ import numpy as np
+ from PIL import Image
+ import torchvision.transforms as transforms
++from torchvision.transforms.functional import to_tensor 
+ import cv2
++import argparse
++from tqdm import tqdm
+ 
+-def vis_parsing_maps(im, parsing_anno, stride, save_im=False, save_path='vis_results/parsing_map_on_im.jpg'):
++def vis_parsing_maps(im, parsing_anno, stride, save_im=False, save_path='vis_results/parsing_map_on_im.jpg', save_path_color='vis_results_color/parsing_map_on_im.jpg'):
+     # Colors for all 20 parts
+     part_colors = [[255, 0, 0], [255, 85, 0], [255, 170, 0],
+                    [255, 0, 85], [255, 0, 170],
+@@ -25,9 +28,9 @@ def vis_parsing_maps(im, parsing_anno, stride, save_im=False, save_path='vis_res
+                    [255, 0, 255], [255, 85, 255], [255, 170, 255],
+                    [0, 255, 255], [85, 255, 255], [170, 255, 255]]
+ 
+-    im = np.array(im)
+-    vis_im = im.copy().astype(np.uint8)
+-    vis_parsing_anno = parsing_anno.copy().astype(np.uint8)
++    vis_im = im.permute(1,2,0) * 255 # CHW to HWC
++    vis_im = vis_im.cpu().numpy().astype(np.uint8)
++    vis_parsing_anno = parsing_anno.astype(np.uint8)
+     vis_parsing_anno = cv2.resize(vis_parsing_anno, None, fx=stride, fy=stride, interpolation=cv2.INTER_NEAREST)
+     vis_parsing_anno_color = np.zeros((vis_parsing_anno.shape[0], vis_parsing_anno.shape[1], 3)) + 255
+ 
+@@ -43,15 +46,32 @@ def vis_parsing_maps(im, parsing_anno, stride, save_im=False, save_path='vis_res
+ 
+     # Save result or not
+     if save_im:
+-        cv2.imwrite(save_path[:-4] +'.png', vis_parsing_anno)
+-        cv2.imwrite(save_path, vis_im, [int(cv2.IMWRITE_JPEG_QUALITY), 100])
++        cv2.imwrite(save_path, vis_parsing_anno)
++        cv2.imwrite(save_path_color, vis_im, [int(cv2.IMWRITE_JPEG_QUALITY), 100])
++
++
++class ImageDataset(torch.utils.data.Dataset):
++    def __init__(self, input_dir):
++        self.input_dir = input_dir
++        self.im_names = os.listdir(input_dir)
++
++    def __len__(self):
++        return len(self.im_names)
++
++    def __getitem__(self, idx):
++        im_name = self.im_names[idx]
++        im_path = os.path.join(self.input_dir, im_name)
++        im = Image.open(im_path)
++        im = to_tensor(im)
++        return im_name, im
+ 
+-    # return vis_im
+ 
+ def evaluate(respth='./res/test_res', dspth='./data', cp='model_final_diss.pth'):
+ 
+     if not os.path.exists(respth):
+         os.makedirs(respth)
++    if not os.path.exists(respth+'_color'):
++        os.makedirs(respth+'_color')
+ 
+     n_classes = 19
+     net = BiSeNet(n_classes=n_classes)
+@@ -60,31 +80,28 @@ def evaluate(respth='./res/test_res', dspth='./data', cp='model_final_diss.pth')
+     net.load_state_dict(torch.load(save_pth))
+     net.eval()
+ 
+-    to_tensor = transforms.Compose([
+-        transforms.ToTensor(),
++    img_transform = transforms.Compose([
+         transforms.Normalize((0.485, 0.456, 0.406), (0.229, 0.224, 0.225)),
+     ])
+-    with torch.no_grad():
+-        for image_path in os.listdir(dspth):
+-            img = Image.open(osp.join(dspth, image_path))
+-            image = img.resize((512, 512), Image.BILINEAR)
+-            img = to_tensor(image)
+-            img = torch.unsqueeze(img, 0)
+-            img = img.cuda()
+-            out = net(img)[0]
+-            parsing = out.squeeze(0).cpu().numpy().argmax(0)
+-            # print(parsing)
+-            print(np.unique(parsing))
+-
+-            vis_parsing_maps(image, parsing, stride=1, save_im=True, save_path=osp.join(respth, image_path))
+-
+-
+-
+ 
++    dataset = ImageDataset(dspth)
++    loader = torch.utils.data.DataLoader(dataset, batch_size=16, shuffle=False, num_workers=8)
+ 
++    with torch.no_grad():
++        for image_paths, imgs in tqdm(loader):
++            imgs = imgs.cuda()
++            imgs_inference = img_transform(imgs)
++            out = net(imgs_inference)[0]
++            parsings = out.cpu().numpy().argmax(1)
++            for image_path, img, parsing in zip(image_paths, imgs, parsings):
++                vis_parsing_maps(img, parsing, stride=1, save_im=True, save_path=osp.join(respth, image_path), save_path_color=osp.join(respth+'_color', image_path))
+ 
+ 
+ if __name__ == "__main__":
+-    evaluate(dspth='/home/zll/data/CelebAMask-HQ/test-img', cp='79999_iter.pth')
++    parser = argparse.ArgumentParser(description="Face parsing on images")
++    parser.add_argument('--input_dir', type=str, help='Path to images')
++    parser.add_argument('--output_dir', type=str, help='Path to predicted masks')
++    args = parser.parse_args()
++    evaluate(dspth=args.input_dir, respth=args.output_dir, cp='79999_iter.pth')
+ 
+ 

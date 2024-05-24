@@ -1,0 +1,18 @@
+[submodule "submodules/INFERNO"]
+	path = submodules/INFERNO
+	url = https://github.com/radekd91/inferno.git
+[submodule "submodules/face-parsing.PyTorch"]
+	path = submodules/face-parsing.PyTorch
+	url = https://github.com/zllrunning/face-parsing.PyTorch.git
+[submodule "submodules/MODNet"]
+	path = submodules/MODNet
+	url = https://github.com/ZHKKKe/MODNet.git
+[submodule "submodules/SMIRK"]
+	path = submodules/SMIRK
+	url = https://github.com/georgeretsi/smirk.git
+[submodule "submodules/omnidata"]
+	path = submodules/omnidata
+	url = https://github.com/EPFL-VILAB/omnidata.git
+[submodule "submodules/DSINE"]
+	path = submodules/DSINE
+	url = https://github.com/baegwangbin/DSINE.git

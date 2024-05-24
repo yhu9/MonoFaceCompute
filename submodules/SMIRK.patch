@@ -1,0 +1,96 @@
+diff --git a/demo_images.py b/demo_images.py
+new file mode 100755
+index 0000000..72fdccb
+--- /dev/null
++++ b/demo_images.py
+@@ -0,0 +1,90 @@
++import torch
++import argparse
++import os
++from pathlib import Path
++from tqdm import tqdm
++import json
++
++from src.smirk_encoder import SmirkEncoder
++
++# needs the right PYTHONPATH
++from inferno.datasets.ImageTestDataset import TestDataCustom
++
++
++if __name__ == '__main__':
++    parser = argparse.ArgumentParser()
++
++    parser.add_argument('--input_folder', type=str, required=True, help='Path to the input images')
++    parser.add_argument('--output_folder', type=str, required=True, help='Output directory')
++    parser.add_argument('--output_name', type=str, default="flame_params.json", help="Name of the output file for FLAME parameters.")
++    parser.add_argument('--device', type=str, default='cuda', help='Device to run the model on')
++    parser.add_argument('--checkpoint', type=str, default='pretrained_models/SMIRK_em1.pt', help='Path to the checkpoint')
++    parser.add_argument('--crop', action='store_true', help='Crop the face using mediapipe')
++    parser.add_argument('--out_path', type=str, default='output', help='Path to save the output (will be created if not exists)')
++    parser.add_argument('--use_smirk_generator', action='store_true', help='Use SMIRK neural image to image translator to reconstruct the image')
++    parser.add_argument('--render_orig', action='store_true', help='Present the result w.r.t. the original image/video size')
++    parser.add_argument('--batch_size', type=int, default=8)
++
++    args = parser.parse_args()
++
++    image_size = 224
++    
++
++    # ----------------------- initialize configuration ----------------------- #
++    smirk_encoder = SmirkEncoder().to(args.device)
++    checkpoint = torch.load(args.checkpoint)
++    checkpoint_encoder = {k.replace('smirk_encoder.', ''): v for k, v in checkpoint.items() if 'smirk_encoder' in k} # checkpoint includes both smirk_encoder and smirk_generator
++
++    smirk_encoder.load_state_dict(checkpoint_encoder)
++    smirk_encoder.eval()
++
++    if args.use_smirk_generator:
++        from src.smirk_generator import SmirkGenerator
++        smirk_generator = SmirkGenerator(in_channels=6, out_channels=3, init_features=32, res_blocks=5).to(args.device)
++
++        checkpoint_generator = {k.replace('smirk_generator.', ''): v for k, v in checkpoint.items() if 'smirk_generator' in k} # checkpoint includes both smirk_encoder and smirk_generator
++        smirk_generator.load_state_dict(checkpoint_generator)
++        smirk_generator.eval()
++
++    code_key_mapping = {"pose_params": "pose", "cam": "cam", "expression_params": "exp", "shape_params": "shape"}
++
++    dataset = TestDataCustom(args.input_folder, landmarks_fan=Path(args.input_folder).parent / "landmarks_fan.pt", face_detector="fan")
++    dataloader = torch.utils.data.DataLoader(dataset, batch_size=args.batch_size, collate_fn=TestDataCustom.collate, num_workers=4)
++
++    code = {}
++
++    with torch.no_grad():
++        for batch in tqdm(dataloader):
++            original_size = batch["image"].shape[2]
++            cropped_images, boxes = dataset.crop(batch)
++            cropped_images = cropped_images.cuda()
++
++            outputs = smirk_encoder(cropped_images)
++
++            # Convert the cam prediction so it relates to the original image instead of the crop
++            box_x, box_y, box_size = boxes.cuda().unbind(-1)
++            s, tx, ty = outputs["cam"].unbind(-1)
++            s *= box_size / original_size
++            tx += ((box_x + box_size/2 - original_size/2) / (original_size/2)) / s
++            ty -= ((box_y + box_size/2 - original_size/2) / (original_size/2)) / s
++            outputs["cam"] = torch.stack([s, tx, ty], dim=-1)
++
++            outputs["pose_params"] = torch.cat((outputs["pose_params"], outputs["jaw_params"]), dim=1)
++
++            for j, name in enumerate(batch["image_name"]):
++                code[name] = {}
++                for k in code_key_mapping:
++                    code[name][code_key_mapping[k]] = outputs[k][j].detach().cpu().numpy().tolist()
++                # reduce the number of shape params - this makes very little difference
++                code[name]["shape"] = code[name]["shape"][:100]
++
++    # Verify dimensions
++    test_v = list(code.values())[0]
++    assert len(test_v["shape"]) == 100
++    assert len(test_v["exp"]) == 50
++    assert len(test_v["pose"]) == 6
++    assert len(test_v["cam"]) == 3
++
++    json.dump(code, open(os.path.join(args.output_folder, args.output_name), 'w'))
++    print("Done")
++

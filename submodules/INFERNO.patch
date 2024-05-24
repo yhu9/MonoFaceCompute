@@ -1,0 +1,563 @@
+diff --git a/.gitmodules b/.gitmodules
+index 24dda7f2..845443bf 100644
+--- a/.gitmodules
++++ b/.gitmodules
+@@ -17,7 +17,7 @@
+ [submodule "external/face-parsing.PyTorch"]
+ 	path = external/face-parsing.PyTorch
+ 	url = https://github.com/zllrunning/face-parsing.PyTorch
+-
++	
+ [submodule "external/3FabRec"]
+ 	path = external/3FabRec
+ 	url = https://github.com/browatbn2/3FabRec/
+@@ -32,20 +32,8 @@
+ 	url = https://github.com/facebookresearch/av_hubert
+ [submodule "external/spectre"]
+ 	path = external/spectre
+-	url = https://github.com/radekd91/spectre
+-	branch = feature/batchVidSupport
++	url = https://github.com/filby89/spectre.git
+ [submodule "external/FOCUS"]
+ 	path = external/FOCUS
+ 	url = https://github.com/radekd91/Occlusion-Robust-MoFA
+ 	branch = feature/integration
+-
+-# private repos
+-[submodule "inferno/sandbox/infernal"]
+-	path = inferno/sandbox/infernal
+-	url = git@gitlab.com:rdanecek/infernal_sandbox.git
+-	branch = master
+-
+-[submodule "inferno_apps/sandbox_apps/infernal"]
+-	path = inferno_apps/sandbox_apps/infernal
+-	url = git@gitlab.com:rdanecek/infernal_apps.git
+-	branch = master
+diff --git a/inferno/datasets/ImageTestDataset.py b/inferno/datasets/ImageTestDataset.py
+index 3e782e7a..43eab667 100644
+--- a/inferno/datasets/ImageTestDataset.py
++++ b/inferno/datasets/ImageTestDataset.py
+@@ -27,6 +27,7 @@ import torch
+ from skimage.io import imread
+ from skimage.transform import rescale, estimate_transform, warp
+ from torch.utils.data import Dataset
++import re
+ 
+ # from inferno.datasets.FaceVideoDataModule import add_pretrained_deca_to_path
+ from inferno.datasets.ImageDatasetHelpers import bbox2point
+@@ -208,6 +209,131 @@ class TestData(Dataset):
+                     }
+ 
+ 
++class TestDataCustom(Dataset):
++    def __init__(self, testpath, landmarks_fan=None, crop_size=224, scale=1.25, face_detector='fan',
++                 scaling_factor=1.0):
++        if isinstance(testpath, list):
++            self.imagepath_list = testpath
++        elif os.path.isdir(testpath):
++            self.imagepath_list = glob(testpath + '/*.jpg') + glob(testpath + '/*.png') + glob(testpath + '/*.bmp')
++        elif os.path.isfile(testpath) and (testpath[-3:] in ['jpg', 'png', 'bmp']):
++            self.imagepath_list = [testpath]
++        else:
++            raise ValueError(f"No image found at {testpath}")
++        print(f"Found {len(self.imagepath_list)} images")
++
++        def sorted_alphanumeric(l): 
++            """ Sort the given iterable in using alphanumeric order.""" 
++            convert = lambda text: int(text) if text.isdigit() else text 
++            alphanum_key = lambda key: [convert(c) for c in re.split("([0-9]+)", key)] 
++            return sorted(l, key=alphanum_key)
++
++        self.imagepath_list = sorted_alphanumeric(self.imagepath_list)
++        # self.imagepath_list = self.imagepath_list[:64] # debug
++        self.scaling_factor = scaling_factor
++        self.crop_size = crop_size
++        self.scale = scale
++        self.resolution_inp = crop_size
++        # add_pretrained_deca_to_path()
++        # from decalib.datasets import detectors
++        if landmarks_fan is None:
++            if face_detector == 'fan':
++                self.face_detector = FAN()
++            # elif face_detector == 'mtcnn':
++            #     self.face_detector = detectors.MTCNN()
++            elif face_detector is not None:
++                raise ValueError(f"Face detector '{face_detector} not found")
++            self.landmarks_fan = None
++        else:
++            self.landmarks_fan = torch.load(landmarks_fan)
++
++    def __len__(self):
++        return len(self.imagepath_list)
++
++    def __getitem__(self, index):
++        imagepath = str(self.imagepath_list[index])
++        imagename = imagepath.split('/')[-1].split('.')[0]
++
++        image = np.array(imread(imagepath))
++        if len(image.shape) == 2:
++            image = image[:, :, None].repeat(1, 1, 3)
++        if len(image.shape) == 3 and image.shape[2] > 3:
++            image = image[:, :, :3]
++
++        if self.scaling_factor != 1.:
++            image = rescale(image, (self.scaling_factor, self.scaling_factor, 1))*255.
++
++        return {
++            'image': torch.tensor(image).float(),
++            'image_name': imagename,
++            'image_path': imagepath,
++            **({} if self.landmarks_fan is None else {"landmarks": self.landmarks_fan[index]})
++        }
++
++    def crop(self, batch):
++        if self.landmarks_fan is None and self.face_detector is None:
++            raise RuntimeError("Cannot crop without either precomputed landmarks or a face detector")
++
++        images = batch["image"]
++        boxes = []
++        crops = []
++        for i, image in enumerate(images):
++            h, w, _ = image.shape
++            # bbox, bbox_type, landmarks = self.face_detector.run(image)
++            if self.landmarks_fan is None:
++                bbox, bbox_type = self.face_detector.run(image)
++            else:
++                kpt = batch["landmarks"][i]
++                left = kpt[:, 0].min()
++                right = kpt[:, 0].max()
++                top = kpt[:, 1].min()
++                bottom = kpt[:, 1].max()
++                bbox, bbox_type = [[left, top, right, bottom]], "kpt68"
++
++            if len(bbox) < 1:
++                print('no face detected! using full image')
++                left = 0
++                right = h - 1
++                top = 0
++                bottom = w - 1
++                old_size, center = bbox2point(left, right, top, bottom, type=bbox_type)
++            else:
++                if len(bbox) > 1:
++                    print("multiple faces detected! using first")
++                bbox = bbox[0]
++                left = bbox[0]
++                right = bbox[2]
++                top = bbox[1]
++                bottom = bbox[3]
++                old_size, center = bbox2point(left, right, top, bottom, type=bbox_type)
++                
++            size = int(old_size * self.scale)
++            src_pts = np.array(
++                [[center[0] - size / 2, center[1] - size / 2], [center[0] - size / 2, center[1] + size / 2],
++                [center[0] + size / 2, center[1] - size / 2]])
++
++            # to disable crop:
++            # size = h - 1
++            # src_pts = np.array([[0, 0], [0, h - 1], [w - 1, 0]])
++        
++            image = image / 255.
++            DST_PTS = np.array([[0, 0], [0, self.resolution_inp - 1], [self.resolution_inp - 1, 0]])
++            tform = estimate_transform('similarity', src_pts, DST_PTS)
++            dst_image = warp(image, tform.inverse, output_shape=(self.resolution_inp, self.resolution_inp))
++            dst_image = dst_image.transpose(2, 0, 1)
++            dst_image = torch.from_numpy(dst_image).float()
++            crops.append(dst_image)
++            boxes.append(torch.tensor([src_pts[0,0], src_pts[0,1], size], dtype=torch.float))
++        return torch.stack(crops), torch.stack(boxes)
++
++    def collate(items):
++        return {
++            "image": torch.stack([it["image"] for it in items]),
++            **({"landmarks": torch.stack([it["landmarks"] for it in items])} if "landmarks" in items[0] else {}),
++            "image_name": [it["image_name"] for it in items],
++            "image_path": [it["image_path"] for it in items],
++        }
++
+ 
+ def video2sequence(video_path):
+     videofolder = video_path.split('.')[0]
+diff --git a/inferno/models/DecaFLAME.py b/inferno/models/DecaFLAME.py
+index b0473af7..daeb1041 100644
+--- a/inferno/models/DecaFLAME.py
++++ b/inferno/models/DecaFLAME.py
+@@ -238,8 +238,13 @@ class FLAME(nn.Module):
+             expression_params = torch.zeros(batch_size, self.cfg.n_exp).to(shape_params.device)
+ 
+         betas = torch.cat([shape_params, expression_params], dim=1)
+-        full_pose = torch.cat(
+-            [pose_params[:, :3], self.neck_pose.expand(batch_size, -1), pose_params[:, 3:], eye_pose_params], dim=1)
++        if pose_params.shape[1] == 6:
++            full_pose = torch.cat(
++                [pose_params[:, :3], self.neck_pose.expand(batch_size, -1), pose_params[:, 3:], eye_pose_params], dim=1)
++        elif pose_params.shape[1] == 9:
++            full_pose = torch.cat([pose_params, eye_pose_params], dim=1)
++        else:
++            raise ValueError()
+         template_vertices = self.v_template.unsqueeze(0).expand(batch_size, -1, -1)
+ 
+         vertices, _ = lbs(betas, full_pose, template_vertices,
+diff --git a/inferno/models/FaceReconstruction/FaceRecBase.py b/inferno/models/FaceReconstruction/FaceRecBase.py
+index 10123b54..b50ccfdc 100644
+--- a/inferno/models/FaceReconstruction/FaceRecBase.py
++++ b/inferno/models/FaceReconstruction/FaceRecBase.py
+@@ -447,15 +447,15 @@ class FaceReconstructionBase(LightningModule):
+             if 'predicted_mask' in batch.keys():
+                 visdict['predicted_mask'] += [(_torch_image2np(batch['predicted_mask'][b]).clip(0, 1) * 255.).astype(np.uint8)]
+ 
+-            if "landmarks" in batch.keys():
+-                if 'fan3d' in batch['landmarks'].keys():
+-                    landmark_gt_fan = util.tensor_vis_landmarks_single_image(
+-                    image_original, batch['landmarks']['fan3d'][b].cpu().numpy()) 
+-                    visdict['landmarks_gt_fan'] += [(landmark_gt_fan * 255.).astype(np.uint8)]
++            # if "landmarks" in batch.keys():
++            #     if 'fan3d' in batch['landmarks'].keys():
++            #         landmark_gt_fan = util.tensor_vis_landmarks_single_image(
++            #         image_original, batch['landmarks']['fan3d'][b].cpu().numpy()) 
++            #         visdict['landmarks_gt_fan'] += [(landmark_gt_fan * 255.).astype(np.uint8)]
+                 
+-                landmarks_gt_mediapipe = draw_mediapipe_landmarks(image_original, 
+-                            batch['landmarks']['mediapipe'][b].cpu().numpy()).astype(np.uint8)
+-                visdict['landmarks_gt_mediapipe'] += [landmarks_gt_mediapipe]
++            #     landmarks_gt_mediapipe = draw_mediapipe_landmarks(image_original, 
++            #                 batch['landmarks']['mediapipe'][b].cpu().numpy()).astype(np.uint8)
++            #     visdict['landmarks_gt_mediapipe'] += [landmarks_gt_mediapipe]
+             
+             landmarks_pred_fan = util.tensor_vis_landmarks_single_image(
+                 image_original, batch['predicted_landmarks'][b].detach().cpu().numpy())
+diff --git a/inferno_apps/EMOCA/demos/download_assets.sh b/inferno_apps/EMOCA/demos/download_assets.sh
+index 2ef71381..6cc7694c 100755
+--- a/inferno_apps/EMOCA/demos/download_assets.sh
++++ b/inferno_apps/EMOCA/demos/download_assets.sh
+@@ -28,24 +28,24 @@ done
+ 
+ echo "Downloading assets to run EMOCA..." 
+ 
+-echo "Downloading EMOCA..."
+-mkdir -p EMOCA/models 
+-cd EMOCA/models 
+-wget https://download.is.tue.mpg.de/emoca/assets/EMOCA/models/EMOCA.zip -O EMOCA.zip
+-echo "Extracting EMOCA..."
+-unzip EMOCA.zip
+-cd ../../
++# echo "Downloading EMOCA..."
++# mkdir -p EMOCA/models 
++# cd EMOCA/models 
++# wget https://download.is.tue.mpg.de/emoca/assets/EMOCA/models/EMOCA.zip -O EMOCA.zip
++# echo "Extracting EMOCA..."
++# unzip EMOCA.zip
++# cd ../../
+ 
+ echo "Downloading EMOCA v2..."
+ mkdir -p EMOCA/models 
+ cd EMOCA/models 
+-wget https://download.is.tue.mpg.de/emoca/assets/EMOCA/models/EMOCA_v2_mp.zip -O EMOCA_v2_mp.zip
++# wget https://download.is.tue.mpg.de/emoca/assets/EMOCA/models/EMOCA_v2_mp.zip -O EMOCA_v2_mp.zip
+ wget https://download.is.tue.mpg.de/emoca/assets/EMOCA/models/EMOCA_v2_lr_mse_20.zip -O EMOCA_v2_lr_mse_20.zip
+-wget https://download.is.tue.mpg.de/emoca/assets/EMOCA/models/EMOCA_v2_lr_cos_1.5.zip -O EMOCA_v2_lr_cos_1.5.zip
++# wget https://download.is.tue.mpg.de/emoca/assets/EMOCA/models/EMOCA_v2_lr_cos_1.5.zip -O EMOCA_v2_lr_cos_1.5.zip
+ echo "Extracting EMOCA v2..."
+-unzip EMOCA_v2_mp.zip
++# unzip EMOCA_v2_mp.zip
+ unzip EMOCA_v2_lr_mse_20.zip
+-unzip EMOCA_v2_lr_cos_1.5.zip
++# unzip EMOCA_v2_lr_cos_1.5.zip
+ cd ../../
+ 
+ echo "Downloading DECA..."
+@@ -70,12 +70,12 @@ echo "Extracting FLAME..."
+ unzip FLAME.zip
+ echo "Assets for EMOCA downloaded and extracted."
+ 
+-cd ../
+-mkdir data 
+-cd data
+-echo "Downloading example test data"
+-wget https://download.is.tue.mpg.de/emoca/assets/data/EMOCA_test_example_data.zip -O EMOCA_test_example_data.zip
+-unzip EMOCA_test_example_data.zip
+-echo "Example test data downloaded and extracted."
++# cd ../
++# mkdir data 
++# cd data
++# echo "Downloading example test data"
++# wget https://download.is.tue.mpg.de/emoca/assets/data/EMOCA_test_example_data.zip -O EMOCA_test_example_data.zip
++# unzip EMOCA_test_example_data.zip
++# echo "Example test data downloaded and extracted."
+ 
+ cd ../inferno_apps/EMOCA/demos
+diff --git a/inferno_apps/EMOCA/demos/test_emoca_on_images.py b/inferno_apps/EMOCA/demos/test_emoca_on_images.py
+index eca8418a..2c9b33a3 100644
+--- a/inferno_apps/EMOCA/demos/test_emoca_on_images.py
++++ b/inferno_apps/EMOCA/demos/test_emoca_on_images.py
+@@ -17,30 +17,32 @@ All rights reserved.
+ # For commercial licensing contact, please contact ps-license@tuebingen.mpg.de
+ """
+ 
+-
++import mediapipe # fixes an error that occurs when importing some packages before mediapipe
+ from inferno_apps.EMOCA.utils.load import load_model
+-from inferno.datasets.ImageTestDataset import TestData
++from inferno.datasets.ImageTestDataset import TestDataCustom
+ import inferno
+-import numpy as np
+ import os
+ import torch
+-from skimage.io import imsave
+ from pathlib import Path
+ from tqdm import auto
+ import argparse
+-from inferno_apps.EMOCA.utils.io import save_obj, save_images, save_codes, test
+-
++from inferno_apps.EMOCA.utils.io import save_obj, save_images, save_codes, decode
++import json
+ 
++@torch.no_grad()
+ def main():
+     parser = argparse.ArgumentParser()
+     # add the input folder arg 
+     parser.add_argument('--input_folder', type=str, default= str(Path(inferno.__file__).parents[1] / "data/EMOCA_test_example_data/images/affectnet_test_examples"))
+     parser.add_argument('--output_folder', type=str, default="image_output", help="Output folder to save the results to.")
+-    parser.add_argument('--model_name', type=str, default='EMOCA', help='Name of the model to use.')
++    parser.add_argument('--output_name', type=str, default="flame_params.json", help="Name of the output file for FLAME parameters.")
++    parser.add_argument('--model_name', type=str, default='EMOCA_v2_lr_mse_20', help='Name of the model to use.')
+     parser.add_argument('--path_to_models', type=str, default=str(Path(inferno.__file__).parents[1] / "assets/EMOCA/models"))
+-    parser.add_argument('--save_images', type=bool, default=True, help="If true, output images will be saved")
+-    parser.add_argument('--save_codes', type=bool, default=False, help="If true, output FLAME values for shape, expression, jaw pose will be saved")
+-    parser.add_argument('--save_mesh', type=bool, default=False, help="If true, output meshes will be saved")
++    parser.add_argument('--save_images', default=True, type=lambda x: str(x).lower() in ['true', '1'], help="If true, output images will be saved")
++    parser.add_argument('--save_codes', default=False, type=lambda x: str(x).lower() in ['true', '1'], help="If true, output FLAME values for shape, expression, jaw pose will be saved")
++    parser.add_argument('--save_mesh', default=False, type=lambda x: str(x).lower() in ['true', '1'], help="If true, output meshes will be saved")
++    parser.add_argument('--mode', type=str, default='detail', help="coarse or detail")
++    parser.add_argument('--batch_size', type=int, default=8, help="Test batch size")
+     
+     args = parser.parse_args()
+ 
+@@ -52,6 +54,7 @@ def main():
+     output_folder = args.output_folder
+     model_name = args.model_name
+ 
++    mode = args.mode
+     mode = 'detail'
+     # mode = 'coarse'
+ 
+@@ -61,28 +64,59 @@ def main():
+     emoca.eval()
+ 
+     # 2) Create a dataset
+-    dataset = TestData(input_folder, face_detector="fan", max_detection=20)
++    # TestDataCustom replaces the original 'TestData' so we can decouple the cropping part from the dataset
++    # this way the dataset works only on the CPU, allowing us to use workers to accelerate loading
++    dataset = TestDataCustom(input_folder, landmarks_fan=Path(input_folder).parent / "landmarks_fan.pt", face_detector="fan")
+ 
+-    ## 4) Run the model on the data
+-    for i in auto.tqdm( range(len(dataset))):
+-        batch = dataset[i]
+-        vals, visdict = test(emoca, batch)
+-        # name = f"{i:02d}"
+-        current_bs = batch["image"].shape[0]
++    do_decode = args.save_mesh or args.save_images
++    code_key_mapping = {"posecode": "pose", "cam": "cam", "expcode": "exp", "shapecode": "shape"}
+ 
+-        for j in range(current_bs):
+-            name =  batch["image_name"][j]
++    dataloader = torch.utils.data.DataLoader(dataset, batch_size=args.batch_size, collate_fn=TestDataCustom.collate, num_workers=4)
+ 
+-            sample_output_folder = Path(output_folder) / name
+-            sample_output_folder.mkdir(parents=True, exist_ok=True)
++    ## 4) Run the model on the data
++    code = {}
++    for batch in auto.tqdm(dataloader):
++        original_size = batch["image"].shape[2]
++        batch["image"], boxes = dataset.crop(batch)
++        batch["image"], batch["landmarks"] = batch["image"].cuda(), batch["landmarks"].cuda()
++        vals = emoca.encode(batch, training=False)
++
++        # Convert the cam prediction so it relates to the original image instead of the crop
++        box_x, box_y, box_size = boxes.cuda().unbind(-1)
++        s, tx, ty = vals["cam"].unbind(-1)
++        s *= box_size / original_size
++        tx += ((box_x + box_size/2 - original_size/2) / (original_size/2)) / s
++        ty -= ((box_y + box_size/2 - original_size/2) / (original_size/2)) / s
++        vals["cam"] = torch.stack([s, tx, ty], dim=-1)
++
++        if do_decode:
++            vals, visdict = decode(emoca, batch, vals, training=False)
++
++        for j, name in enumerate(batch["image_name"]):
++            if args.save_mesh or args.save_images:
++                sample_output_folder = Path(output_folder) / name
++                sample_output_folder.mkdir(parents=True, exist_ok=True)
+ 
+             if args.save_mesh:
+                 save_obj(emoca, str(sample_output_folder / "mesh_coarse.obj"), vals, j)
+             if args.save_images:
+                 save_images(output_folder, name, visdict, with_detection=True, i=j)
+             if args.save_codes:
+-                save_codes(Path(output_folder), name, vals, i=j)
+-
++                # save_codes(Path(output_folder), name, vals, i=j)
++                # vals keys: ['shapecode', 'texcode', 'expcode', 'posecode', 'cam', 'lightcode', 'detailcode', 'detailemocode', 'images', 'original_code', 'predicted_images', 'predicted_detailed_image', 'predicted_translated_image', 'ops', 'normals', 'mask_face_eye', 'verts', 'albedo', 'landmarks2d', 'landmarks3d', 'predicted_landmarks', 'predicted_landmarks_mediapipe', 'trans_verts', 'masks', 'predicted_detailed_translated_image', 'translated_uv_texture', 'uv_texture_gt', 'uv_texture', 'uv_detail_normals', 'uv_shading', 'uv_vis_mask', 'uv_mask', 'uv_z', 'displacement_map']
++                code[name] = {}
++                for k in code_key_mapping:
++                    code[name][code_key_mapping[k]] = vals[k][j].detach().cpu().numpy().tolist()
++
++    # Verify dimensions
++    test_v = list(code.values())[0]
++    assert len(test_v["shape"]) == 100
++    assert len(test_v["exp"]) == 50
++    assert len(test_v["pose"]) == 6
++    assert len(test_v["cam"]) == 3
++
++    if args.save_codes:
++        json.dump(code, open(os.path.join(output_folder, args.output_name), 'w'))
+     print("Done")
+ 
+ 
+diff --git a/inferno_apps/FaceReconstruction/demo/demo_face_rec_on_images.py b/inferno_apps/FaceReconstruction/demo/demo_face_rec_on_images.py
+index e32bb65c..8813c18a 100644
+--- a/inferno_apps/FaceReconstruction/demo/demo_face_rec_on_images.py
++++ b/inferno_apps/FaceReconstruction/demo/demo_face_rec_on_images.py
+@@ -17,19 +17,18 @@ All rights reserved.
+ # For commercial licensing contact, please contact ps-license@tuebingen.mpg.de
+ """
+ 
++import mediapipe # fixes an error that occurs when importing some packages before mediapipe
+ from inferno_apps.FaceReconstruction.utils.load import load_model
+-from inferno.datasets.ImageTestDataset import TestData
+-import inferno
+-import numpy as np
++from inferno.datasets.ImageTestDataset import TestDataCustom
+ import os
+ import torch
+-from skimage.io import imsave
+ from pathlib import Path
+ from tqdm import auto
+ import argparse
+ from inferno_apps.FaceReconstruction.utils.output import save_obj, save_images, save_codes
+ from inferno_apps.FaceReconstruction.utils.test import test
+ from inferno.utils.other import get_path_to_assets
++import json
+ 
+ 
+ def main():
+@@ -37,12 +36,14 @@ def main():
+     # add the input folder arg 
+     parser.add_argument('--input_folder', type=str, default= str(Path(get_path_to_assets())/ "data/EMOCA_test_example_data/images/affectnet_test_examples"))
+     parser.add_argument('--output_folder', type=str, default="image_output", help="Output folder to save the results to.")
++    parser.add_argument('--output_name', type=str, default="flame_params.json", help="Name of the output file for FLAME parameters.")
+     parser.add_argument('--model_name', type=str, default='EMICA-CVT_flame2020_notexture', help='Name of the model to use.')
+     # parser.add_argument('--model_name', type=str, default='EMICA_flame2020_notexture', help='Name of the model to use.')
+     parser.add_argument('--path_to_models', type=str, default=str(Path(get_path_to_assets()) / "FaceReconstruction/models"))
+-    parser.add_argument('--save_images', type=bool, default=True, help="If true, output images will be saved")
+-    parser.add_argument('--save_codes', type=bool, default=False, help="If true, output FLAME values for shape, expression, jaw pose will be saved")
+-    parser.add_argument('--save_mesh', type=bool, default=False, help="If true, output meshes will be saved")
++    parser.add_argument('--save_images', type=lambda x: str(x).lower() in ['true', '1'], default=True, help="If true, output images will be saved")
++    parser.add_argument('--save_codes', type=lambda x: str(x).lower() in ['true', '1'], default=False, help="If true, output FLAME values for shape, expression, jaw pose will be saved")
++    parser.add_argument('--save_mesh', type=lambda x: str(x).lower() in ['true', '1'], default=False, help="If true, output meshes will be saved")
++    parser.add_argument('--batch_size', type=int, default=8, help="Test batch size")
+     
+     args = parser.parse_args()
+ 
+@@ -60,30 +61,60 @@ def main():
+     face_rec_model.eval()
+ 
+     # 2) Create a dataset
+-    dataset = TestData(input_folder, face_detector="fan", max_detection=20)
++    # TestDataCustom replaces the original 'TestData' so we can decouple the cropping part from the dataset
++    # this way the dataset works only on the CPU, allowing us to use workers to accelerate loading
++    dataset = TestDataCustom(input_folder, landmarks_fan=Path(input_folder).parent / "landmarks_fan.pt", face_detector="fan")
++
++    do_decode = args.save_mesh or args.save_images
++    code_key_mapping = {"posecode": "pose", "cam": "cam", "expcode": "exp", "shapecode": "shape"}
++
++    dataloader = torch.utils.data.DataLoader(dataset, batch_size=args.batch_size, collate_fn=TestDataCustom.collate, num_workers=4)
+ 
+     ## 4) Run the model on the data
+-    for i in auto.tqdm( range(len(dataset))):
+-        batch = dataset[i]
++    code = {}
++    for i,batch in enumerate(auto.tqdm(dataloader)):
++        original_size = batch["image"].shape[2]
++        batch["image"], boxes = dataset.crop(batch)
++        batch["image"], batch["landmarks"] = batch["image"].cuda(), batch["landmarks"].cuda()
+         vals = test(face_rec_model, batch)
+-        visdict = face_rec_model.visualize_batch(batch, i, None, in_batch_idx=None)
+-        # name = f"{i:02d}"
+-        current_bs = batch["image"].shape[0]
+ 
+-        for j in range(current_bs):
+-            name =  batch["image_name"][j]
++        # Convert the cam prediction so it relates to the original image instead of the crop
++        box_x, box_y, box_size = boxes.cuda().unbind(-1)
++        s, tx, ty = vals["cam"].unbind(-1)
++        s *= box_size / original_size
++        tx += ((box_x + box_size/2 - original_size/2) / (original_size/2)) / s
++        ty -= ((box_y + box_size/2 - original_size/2) / (original_size/2)) / s
++        vals["cam"] = torch.stack([s, tx, ty], dim=-1)
+ 
+-            sample_output_folder = Path(output_folder) / name
+-            sample_output_folder.mkdir(parents=True, exist_ok=True)
++        for j, name in enumerate(batch["image_name"]):
++            if args.save_mesh or args.save_images:
++                sample_output_folder = Path(output_folder) / name
++                sample_output_folder.mkdir(parents=True, exist_ok=True)
+ 
+             if args.save_mesh:
+                 save_obj(face_rec_model, str(sample_output_folder / "mesh_coarse.obj"), vals, j)
+-            if args.save_codes:
+-                save_codes(Path(output_folder), name, vals, i=j)
+             if args.save_images:
++                visdict = face_rec_model.visualize_batch(batch, i, None, in_batch_idx=None)
+                 save_images(output_folder, name, visdict, with_detection=True, i=j)
+- 
++            if args.save_codes:
++                # save_codes(Path(output_folder), name, vals, i=j)
++                code[name] = {}
++                vals["posecode"] = torch.cat((vals["globalpose"], vals["jawpose"]), dim=1)
++                for k in code_key_mapping:
++                    code[name][code_key_mapping[k]] = vals[k][j].detach().cpu().numpy().tolist()
++                # reduce the number of shape params - this makes very little difference
++                code[name]["shape"] = code[name]["shape"][:100]
++                code[name]["exp"] = code[name]["exp"][:50]
++
++    # Verify dimensions
++    test_v = list(code.values())[0]
++    assert len(test_v["shape"]) == 100
++    assert len(test_v["exp"]) == 50
++    assert len(test_v["pose"]) == 6
++    assert len(test_v["cam"]) == 3
+ 
++    if args.save_codes:
++        json.dump(code, open(os.path.join(output_folder, args.output_name), 'w'))
+     print("Done")
+ 
+ 
+diff --git a/inferno_apps/FaceReconstruction/download_assets.sh b/inferno_apps/FaceReconstruction/download_assets.sh
+index 39a82ebf..dad9e6a0 100755
+--- a/inferno_apps/FaceReconstruction/download_assets.sh
++++ b/inferno_apps/FaceReconstruction/download_assets.sh
+@@ -1,4 +1,4 @@
+-cd ../../.. 
++cd ../..
+ mkdir -p assets 
+ cd assets
+ 
+@@ -55,11 +55,11 @@ echo "Extracting FaceReconstruction models..."
+ unzip -n FaceReconstruction.zip
+ 
+ 
+-mkdir data 
+-cd data
+-echo "Downloading example test data"
+-wget https://download.is.tue.mpg.de/emoca/assets/data/EMOCA_test_example_data.zip -O EMOCA_test_example_data.zip
+-unzip EMOCA_test_example_data.zip
+-echo "Example test data downloaded and extracted."
++# mkdir data 
++# cd data
++# echo "Downloading example test data"
++# wget https://download.is.tue.mpg.de/emoca/assets/data/EMOCA_test_example_data.zip -O EMOCA_test_example_data.zip
++# unzip EMOCA_test_example_data.zip
++# echo "Example test data downloaded and extracted."
+ 
+-cd ../inferno_apps/FaceReconstruction/demos
++cd ../inferno_apps/FaceReconstruction/demo

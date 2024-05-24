@@ -1,0 +1,98 @@
+diff --git a/demo/image_matting/colab/inference.py b/demo/image_matting/colab/inference.py
+index f9a15e0..7e7d12f 100644
+--- a/demo/image_matting/colab/inference.py
++++ b/demo/image_matting/colab/inference.py
+@@ -3,6 +3,7 @@ import sys
+ import argparse
+ import numpy as np
+ from PIL import Image
++from tqdm import tqdm
+ 
+ import torch
+ import torch.nn as nn
+@@ -11,6 +12,33 @@ import torchvision.transforms as transforms
+ 
+ from src.models.modnet import MODNet
+ 
++class ImageDataset(torch.utils.data.Dataset):
++    def __init__(self, input_dir, transform):
++        self.input_dir = input_dir
++        self.im_names = os.listdir(input_dir)
++        self.transform = transform
++
++    def __len__(self):
++        return len(self.im_names)
++
++    def __getitem__(self, idx):
++        im_name = self.im_names[idx]
++        im_path = os.path.join(self.input_dir, im_name)
++        im = Image.open(im_path)
++
++        # unify image channels to 3
++        im = np.asarray(im)
++        if len(im.shape) == 2:
++            im = im[:, :, None]
++        if im.shape[2] == 1:
++            im = np.repeat(im, 3, axis=2)
++        elif im.shape[2] == 4:
++            im = im[:, :, 0:3]
++
++        # convert image to PyTorch tensor
++        im = Image.fromarray(im)
++        im = self.transform(im)
++        return im_name, im
+ 
+ if __name__ == '__main__':
+     # define cmd arguments
+@@ -55,29 +83,9 @@ if __name__ == '__main__':
+     modnet.eval()
+ 
+     # inference images
+-    im_names = os.listdir(args.input_path)
+-    for im_name in im_names:
+-        print('Process image: {0}'.format(im_name))
+-
+-        # read image
+-        im = Image.open(os.path.join(args.input_path, im_name))
+-
+-        # unify image channels to 3
+-        im = np.asarray(im)
+-        if len(im.shape) == 2:
+-            im = im[:, :, None]
+-        if im.shape[2] == 1:
+-            im = np.repeat(im, 3, axis=2)
+-        elif im.shape[2] == 4:
+-            im = im[:, :, 0:3]
+-
+-        # convert image to PyTorch tensor
+-        im = Image.fromarray(im)
+-        im = im_transform(im)
+-
+-        # add mini-batch dim
+-        im = im[None, :, :, :]
+-
++    dataset = ImageDataset(args.input_path, transform=im_transform)
++    loader = torch.utils.data.DataLoader(dataset, batch_size=8, shuffle=False, num_workers=8)
++    for im_names, im in tqdm(loader):
+         # resize image for input
+         im_b, im_c, im_h, im_w = im.shape
+         if max(im_h, im_w) < ref_size or min(im_h, im_w) > ref_size:
+@@ -96,10 +104,13 @@ if __name__ == '__main__':
+         im = F.interpolate(im, size=(im_rh, im_rw), mode='area')
+ 
+         # inference
+-        _, _, matte = modnet(im.cuda() if torch.cuda.is_available() else im, True)
++        with torch.no_grad():
++            _, _, matte = modnet(im.cuda() if torch.cuda.is_available() else im, True)
+ 
+-        # resize and save matte
+         matte = F.interpolate(matte, size=(im_h, im_w), mode='area')
+-        matte = matte[0][0].data.cpu().numpy()
+-        matte_name = im_name.split('.')[0] + '.png'
+-        Image.fromarray(((matte * 255).astype('uint8')), mode='L').save(os.path.join(args.output_path, matte_name))
++
++        # resize and save matte
++        for i, im_name in enumerate(im_names):
++            matte_img = matte[i][0].data.cpu().numpy()
++            matte_name = im_name.split('.')[0] + '.png'
++            Image.fromarray(((matte_img * 255).astype('uint8')), mode='L').save(os.path.join(args.output_path, matte_name))

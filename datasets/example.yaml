@@ -1,0 +1,24 @@
+
+base_dir: /bulk/data/face_raw/Example
+output_dir: /bulk/data/face_processed/Example
+tracker: EMOCA
+shape_tracker: SMIRK
+crop_mode: constant
+crop_scale: 1.4
+resize: 512
+sequences:
+    1:
+        source: 1.mp4 # relative to base_dir
+    2:
+        source: 2.mp4
+    3:
+        source: 3.mp4
+    4:
+        source: 4.mp4
+    5:
+        source: 5.mp4
+    6:
+        source: 6.mp4
+
+shape_sequence: 1
+steps: ["extract", "crop", "matte", "segment", "landmarks", "track", "optimize", "visualize"]
