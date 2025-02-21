@@ -15,10 +15,14 @@ fi
 echo "Installing dependencies"
 conda env update -n $ENV_NAME --file ./environment.yaml 
 
+# PyTorch3D
+pip install git+https://github.com/facebookresearch/pytorch3d.git@v0.6.2
 # Install MediaPipe (we have to do it separately to avoid conflits with protobuf's version from face-detection-tflite)
 pip install mediapipe==0.10.11
 # Install ffmpeg separately for similar reasons
 conda install ffmpeg~=4.3 -y
+# Downgrade GCC
+conda install gcc=12.1.0 -c conda-forge -y
 
 pip install -e ./submodules/INFERNO
 
