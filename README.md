@@ -1,3 +1,5 @@
+Current setup steps in the original repo doesn't cover several details that needs to be addressed in order to run this repository. In order to address those issues this fork is updated with the correct steps necessary to get this running as of --------.
+
 # MonoFaceCompute
 
 This repository aims to facilitate preprocessing of monocular human face videos, covering a range of commonly used outputs from semantic segmentation to face tracking. The goal is to provide a convenient and coherent repository for research work.
@@ -18,8 +20,10 @@ Pull requests for other computations are welcome!
 
 ## Setup
 
+The current setup step in the main branch doesn't currently work due to deprecation of older versions of numpy with tensorflow, pytorch, chumpy. The build process needs to be reworked so that the listed packages installed in the environment.yml file actually is able to be installed together. 
+
 1. Pull the submodules: `./pull_submodules.sh`
-2. Run the setup script: `./setup.sh` to build a conda environment with all required dependencies.
+2. Run the setup script: ./setup.sh to build a conda environment with all required dependencies.
 3. Download pretrained models and other required files: `./download_all_assets.sh`
 4. Configure your dataset according to the examples in [datasets](./datasets).
 
