@@ -1,17 +1,16 @@
 import argparse
 from pathlib import Path
-from tqdm import tqdm
 
-import torch
-from torch.utils.data import DataLoader, Subset
 import cv2
-import numpy as np
-import imageio
-
 import face_alignment
+import imageio
+import numpy as np
+import torch
+import torchvision
 from inferno.datasets.ImageTestDataset import TestDataCustom
-
-from utils import gaussian_kernel, apply_featurewise_conv1d
+from torch.utils.data import DataLoader, Subset
+from tqdm import tqdm
+from utils import apply_featurewise_conv1d, gaussian_kernel
 
 CROP_MODES = ["smooth", "constant", "fixed"]
 """
@@ -27,7 +26,7 @@ CROP_MODE_CONSTANT_Q = 0.05 # quantile for mode=constant
 CONFIDENCE_THRESHOLD = 0.6 # min threshold for resolving multiple detections on the same frame
 
 @torch.no_grad()
-def detect_faces(dataloader, face_selection_strategy):
+def detect_faces(dataloader, face_selection_strategy, max_input_size):
     raw_boxes = []
     num_detections_stats = dict()
     image_idx = 0
@@ -35,10 +34,18 @@ def detect_faces(dataloader, face_selection_strategy):
     valid_ids = []
 
     for batch in tqdm(dataloader):
-        imgs = batch["image"]
+        imgs = batch["image"].permute(0, 3, 1, 2)  # BHWC to BCHW
 
+        b, c, h, w = imgs.shape
+        if min(h, w) > max_input_size:
+            # Resize images to max input size if they are too large. Resize
+            # operation maintains aspect ratio by reducing smallest side to
+            # max_input_size.
+            resize_op = torchvision.transforms.Resize(size=max_input_size)
+            imgs = resize_op(imgs)
+            
         # Face detection
-        boxes_batch = fa.face_detector.detect_from_batch(imgs.permute(0,3,1,2)) # BHWC to BCHW
+        boxes_batch = fa.face_detector.detect_from_batch(imgs)
 
         for boxes, name in zip(boxes_batch, batch["image_name"]):
             boxes = [torch.tensor(box, dtype=torch.float) for box in boxes]
@@ -69,6 +76,11 @@ def detect_faces(dataloader, face_selection_strategy):
                     raise ValueError(f"Unknown face selection strategy '{face_selection_strategy}'")
             else:
                 bbox = boxes[0]
+                
+            # If the images were resized, we need to scale the bounding box
+            if min(h, w) > max_input_size:
+                scale_factor = min(h, w) / max_input_size
+                bbox[:4] = (bbox[:4] * scale_factor).round().int()
             raw_boxes.append(bbox[:4])
             valid_ids.append(image_idx)
             image_idx += 1
@@ -126,6 +138,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
 
     parser.add_argument("--input", type=str, required=True, help="Path to the input images")
+    parser.add_argument("--max_input_size", type=int, default=1080, help="max input size of the images")
     parser.add_argument("--output", type=str, required=True, help="Output directory")
     parser.add_argument("--resize", type=int, required=True, help="Size to resize the final crops to")
     parser.add_argument("--device", type=str, default="cuda", help="Device to run the model on")
@@ -171,7 +184,7 @@ if __name__ == "__main__":
         raw_boxes = [torch.tensor([center_x-s/2, center_y-s/2, center_x+s/2, center_y+s/2], dtype=torch.float) for _ in range(dataset_size)]
     else:
         print("Running initial bbox detection")
-        raw_boxes, valid_ids = detect_faces(dataloader, args.face_selection_strategy)
+        raw_boxes, valid_ids = detect_faces(dataloader, args.face_selection_strategy, args.max_input_size)
 
     if mode == "fixed":
         pass

@@ -13,8 +13,10 @@ else
 fi
 
 echo "Installing dependencies"
-conda env update -n $ENV_NAME --file ./environment.yaml 
+mamba env update -n $ENV_NAME --file ./environment.yaml 
 
+# PyTorch
+mamba install pytorch==1.13.0 torchvision==0.14.0 torchaudio==0.13.0 pytorch-cuda=11.7 -c pytorch
 # PyTorch3D
 pip install git+https://github.com/facebookresearch/pytorch3d.git@v0.6.2
 # Install MediaPipe (we have to do it separately to avoid conflits with protobuf's version from face-detection-tflite)

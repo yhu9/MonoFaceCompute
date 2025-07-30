@@ -2,7 +2,10 @@ Current setup steps in the original repo doesn't cover several details that need
 
 # MonoFaceCompute
 
-This repository aims to facilitate preprocessing of monocular human face videos, covering a range of commonly used outputs from semantic segmentation to face tracking. The goal is to provide a convenient and coherent repository for research work.
+This repository aims to facilitate preprocessing of monocular human face
+videos, covering a range of commonly used outputs from semantic segmentation to
+face tracking. The goal is to provide a convenient and coherent repository for
+research work.
 
 Computations include: 
 - Semantic Segmentation (https://github.com/zllrunning/face-parsing.PyTorch)
@@ -18,9 +21,18 @@ Computations include:
 
 Pull requests for other computations are welcome!
 
+So far I've also made several edits to the preprocessing so that it runs more
+smoothly without any errors. 
+
 ## Setup
 
 The current setup step in the main branch doesn't currently work due to deprecation of older versions of numpy with tensorflow, pytorch, chumpy. The build process needs to be reworked so that the listed packages installed in the environment.yml file actually is able to be installed together. 
+
+There are currently some issues with the ./setup.sh script that needs to be
+fixed. Mainly with the conda environment being incompatible with some modules.
+A slightly better setup script is found on the SPARK github repo, but some
+additional steps needs to still be taken and adjusting the setup script is
+still a wip.
 
 1. Pull the submodules: `./pull_submodules.sh`
 2. Run the setup script: ./setup.sh to build a conda environment with all required dependencies.
@@ -30,6 +42,7 @@ The current setup step in the main branch doesn't currently work due to deprecat
 One dataset consists of one or multiple monocular videos. Several parameters can be tweaked, such as the strategy for cropping the videos, what face tracker to use, what dimensions the crops should be resized to or what steps of the preprocessing pipeline to run.
 
 This was tested on Ubuntu 22.04 with a NVIDIA A5000 GPU.
+Also tested on Ubuntu 22.04.5 with NVIDIA RTX 4070 GPU.
 
 ## Usage
 
