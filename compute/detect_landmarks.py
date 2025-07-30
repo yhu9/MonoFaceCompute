@@ -1,23 +1,18 @@
-from glob import glob
+import argparse
 import re
+from glob import glob
 from pathlib import Path
 
-import argparse
-from tqdm import tqdm
-from PIL import Image
-import torch
-from torch.utils.data import Dataset
-import numpy as np 
-
-import mediapipe as mp
 import face_alignment
-from fdlite import (
-    FaceDetection,
-    FaceLandmark,
-    face_detection_to_roi,
-    IrisLandmark,
-    iris_roi_from_face_landmarks,
-)
+import mediapipe as mp
+import numpy as np
+import torch
+from fdlite import (FaceDetection, FaceLandmark, IrisLandmark,
+                    face_detection_to_roi, iris_roi_from_face_landmarks)
+from PIL import Image
+from torch.utils.data import Dataset
+from tqdm import tqdm
+
 
 class ImageDataset(Dataset):
     def __init__(self, image_paths):
@@ -199,10 +194,16 @@ if __name__ == "__main__":
                     # raise ValueError(f"No fdlite iris ROIs for frame {path}")
                     iris_lmks = None
                 else:
-                    left_eye_detection = detect_iris_landmarks(img, iris_rois[0]).iris[0]
-                    right_eye_detection = detect_iris_landmarks(img, iris_rois[1], is_right_eye=True).iris[0]
-                    iris_lmks = torch.tensor([[right_eye_detection.x * width, right_eye_detection.y * height],
+                    try:
+                        left_eye_detection = detect_iris_landmarks(img, iris_rois[0]).iris[0]
+                        right_eye_detection = detect_iris_landmarks(img, iris_rois[1], is_right_eye=True).iris[0]
+                        iris_lmks = torch.tensor([[right_eye_detection.x * width, right_eye_detection.y * height],
                                             [left_eye_detection.x * width, left_eye_detection.y * height]], dtype=torch.float)
+                    except Exception as e:
+                        # could not detect iris landmarks from extracted ROIs
+                        # for frame {path}. SKIPPING.
+                        iris_lmks = None
+                        print(f"Error detecting iris landmarks for frame {path}: {e}")
         landmarks_iris_all.append(iris_lmks)
         ###################################################    output_dir = Path(args.output_dir)
 
