@@ -19,23 +19,11 @@ Computations include:
 
 Pull requests for other computations are welcome!
 
-So far I've also made several edits to the preprocessing so that it runs more
-smoothly without any errors. 
-
 ## Setup
 
-The current setup step in the main branch doesn't currently work due to deprecation of older versions of numpy with tensorflow, pytorch, chumpy. The build process needs to be reworked so that the listed packages installed in the environment.yml file actually is able to be installed together. 
-
-There are currently some issues with the ./setup.sh script that needs to be
-fixed. Mainly with the conda environment being incompatible with some modules.
-A slightly better setup script is found on the SPARK github repo, but some
-additional steps needs to still be taken and adjusting the setup script is
-still a wip.
-
-1. Pull the submodules: `./pull_submodules.sh`
-2. Run the setup script: ./setup.sh to build a conda environment with all required dependencies.
-3. Download pretrained models and other required files: `./download_all_assets.sh`
-4. Configure your dataset according to the examples in [datasets](./datasets).
+1. Run the setup script: `./setup.sh` to build a conda environment with al
+   required dependencies.
+2. Configure your dataset according to the examples in [datasets](./datasets).
 
 One dataset consists of one or multiple monocular videos. Several parameters can be tweaked, such as the strategy for cropping the videos, what face tracker to use, what dimensions the crops should be resized to or what steps of the preprocessing pipeline to run.
 

@@ -30,7 +30,6 @@ mamba install ffmpeg~=4.3 -y
 mamba install gcc=12.1.0 -c conda-forge -y
 
 pip install mediapipe==0.10.9 protobuf==3.20.3
-pip install numpy==1.23
 pip install -e ./submodules/INFERNO
 
 #################### Omnidata ####################
@@ -39,3 +38,19 @@ pip install -e ./submodules/INFERNO
 
 #################### DSINE ####################
 pip install geffnet==1.0.2
+
+#################### Final version pins ####################
+# These must run LAST: earlier pip installs (e.g. INFERNO and its deps) pull in
+# unpinned versions that override the project's pins, so we re-assert them here.
+
+# Later pip installs upgrade numpy to 1.24.x (violates tensorflow's numpy<1.24);
+# re-pin to 1.23 to match the rest of the project.
+pip install --no-cache-dir --force-reinstall --no-deps "numpy==1.23.0"
+
+# conda pulls h5py from conda-forge but hdf5 from the defaults channel, whose
+# build lacks the H5Pget_fapl_direct symbol -> "undefined symbol" ImportError.
+# Reinstall h5py from the PyPI wheel, which bundles its own HDF5 and avoids the
+# conda libhdf5 entirely.
+pip install --no-cache-dir --force-reinstall --no-deps "h5py==3.7.0"
+
+./download_all_assets.sh
