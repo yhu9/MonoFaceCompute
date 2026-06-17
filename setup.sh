@@ -1,5 +1,9 @@
 ENV_NAME=MonoFaceCompute
 
+# pull submodules
+./pull_submodules.sh
+
+# create conda environment
 echo "Creating conda environment"
 mamba create -n $ENV_NAME python=3.8
 conda activate $ENV_NAME

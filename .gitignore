@@ -137,4 +137,3 @@ cython_debug/
 #.idea/
 
 .vscode
-datasets/*
