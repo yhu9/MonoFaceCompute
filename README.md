@@ -1,5 +1,3 @@
-Current setup steps in the original repo doesn't cover several details that needs to be addressed in order to run this repository. In order to address those issues this fork is updated with the correct steps necessary to get this running as of --------.
-
 # MonoFaceCompute
 
 This repository aims to facilitate preprocessing of monocular human face
