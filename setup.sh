@@ -1,36 +1,37 @@
 ENV_NAME=MonoFaceCompute
 
 echo "Creating conda environment"
-conda create -n $ENV_NAME python=3.8 
-eval "$(conda shell.bash hook)"
+mamba create -n $ENV_NAME python=3.8
 conda activate $ENV_NAME
-if echo $CONDA_PREFIX | grep $ENV_NAME
-then
-    echo "Conda environment successfully activated"
-else
-    echo "Conda environment not activated. Probably it was not created successfully for some reason. Please activate the conda environment before running this script."
-    exit
-fi
 
-echo "Installing dependencies"
-mamba env update -n $ENV_NAME --file ./environment.yaml 
+# Environment cuda libraries
+mamba install -n $ENV_NAME -c "nvidia/label/cuda-11.7.0" cuda-toolkit -y
+mamba install -n $ENV_NAME -c conda-forge gxx_linux-64=11 gcc_linux-64=11 -y
+export CC=$CONDA_PREFIX/bin/x86_64-conda-linux-gnu-gcc
+export CXX=$CONDA_PREFIX/bin/x86_64-conda-linux-gnu-g++
+export NVCC_PREPEND_FLAGS="-ccbin $CXX"
+export CUDA_HOME=$CONDA_PREFIX
+# which nvcc && nvcc --version
 
-# PyTorch
-mamba install pytorch==1.13.0 torchvision==0.14.0 torchaudio==0.13.0 pytorch-cuda=11.7 -c pytorch
-# PyTorch3D
-pip install git+https://github.com/facebookresearch/pytorch3d.git@v0.6.2
-# Install MediaPipe (we have to do it separately to avoid conflits with protobuf's version from face-detection-tflite)
-pip install mediapipe==0.10.11
+mamba env update -n $ENV_NAME -f environment.yaml
+
+# PyTorch + Pytorch3d
+mamba install -n $ENV_NAME pytorch=1.13.0 torchvision=0.14.0 pytorch-cuda=11.7 -c pytorch -c nvidia -y
+mamba install -n $ENV_NAME iopath -c iopath -y
+# Pin torch/pytorch-cuda and add the pytorch/nvidia channels so the solver can't downgrade torch
+mamba install -n $ENV_NAME pytorch3d pytorch=1.13.0 pytorch-cuda=11.7 -c pytorch3d -c pytorch -c nvidia -c conda-forge -y
 # Install ffmpeg separately for similar reasons
-conda install ffmpeg~=4.3 -y
+mamba install ffmpeg~=4.3 -y
 # Downgrade GCC
-conda install gcc=12.1.0 -c conda-forge -y
+mamba install gcc=12.1.0 -c conda-forge -y
 
+pip install mediapipe==0.10.9 protobuf==3.20.3
+pip install numpy==1.23
 pip install -e ./submodules/INFERNO
 
 #################### Omnidata ####################
-# conda install -c conda-forge aria2
+# mamba install -c conda-forge aria2
 # (cd submodules/omnidata && pip install 'omnidata-tools')
 
 #################### DSINE ####################
-pip install geffnet
+pip install geffnet==1.0.2
