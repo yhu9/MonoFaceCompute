@@ -13,3 +13,4 @@ sequences:
     6: { source: 6.mp4 }
 shape_sequence: 1
 steps: ["extract", "crop", "matte", "segment", "landmarks", "track", "optimize"]
+
