@@ -53,4 +53,4 @@ pip install --no-cache-dir --force-reinstall --no-deps "numpy==1.23.0"
 # conda libhdf5 entirely.
 pip install --no-cache-dir --force-reinstall --no-deps "h5py==3.7.0"
 
-./download_all_assets.sh
+yes y | ./download_all_assets.sh
