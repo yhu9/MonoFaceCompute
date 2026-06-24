@@ -1,29 +1,29 @@
-ENV_NAME=MonoFaceCompute
+# ENV_NAME=MonoFaceCompute
 
 # pull submodules
 ./pull_submodules.sh
 
 # create conda environment
-echo "Creating conda environment"
-mamba create -n $ENV_NAME python=3.8
-conda activate $ENV_NAME
+# echo "Creating conda environment"
+# mamba create -n $ENV_NAME python=3.8
+# conda activate $ENV_NAME
 
 # Environment cuda libraries
-mamba install -n $ENV_NAME -c "nvidia/label/cuda-11.7.0" cuda-toolkit -y
-mamba install -n $ENV_NAME -c conda-forge gxx_linux-64=11 gcc_linux-64=11 -y
+mamba install -c "nvidia/label/cuda-11.7.0" cuda-toolkit -y
+mamba install -c conda-forge gxx_linux-64=11 gcc_linux-64=11 -y
 export CC=$CONDA_PREFIX/bin/x86_64-conda-linux-gnu-gcc
 export CXX=$CONDA_PREFIX/bin/x86_64-conda-linux-gnu-g++
 export NVCC_PREPEND_FLAGS="-ccbin $CXX"
 export CUDA_HOME=$CONDA_PREFIX
 # which nvcc && nvcc --version
 
-mamba env update -n $ENV_NAME -f environment.yaml
+mamba env update -f environment.yaml
 
 # PyTorch + Pytorch3d
-mamba install -n $ENV_NAME pytorch=1.13.0 torchvision=0.14.0 pytorch-cuda=11.7 -c pytorch -c nvidia -y
-mamba install -n $ENV_NAME iopath -c iopath -y
+mamba install pytorch=1.13.0 torchvision=0.14.0 pytorch-cuda=11.7 -c pytorch -c nvidia -y
+mamba install iopath -c iopath -y
 # Pin torch/pytorch-cuda and add the pytorch/nvidia channels so the solver can't downgrade torch
-mamba install -n $ENV_NAME pytorch3d pytorch=1.13.0 pytorch-cuda=11.7 -c pytorch3d -c pytorch -c nvidia -c conda-forge -y
+mamba install pytorch3d pytorch=1.13.0 pytorch-cuda=11.7 -c pytorch3d -c pytorch -c nvidia -c conda-forge -y
 # Install ffmpeg separately for similar reasons
 mamba install ffmpeg~=4.3 -y
 # Downgrade GCC
